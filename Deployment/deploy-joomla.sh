@@ -162,7 +162,12 @@ systemctl enable mysql
 print_message "Configuring MySQL database..."
 MYSQL_ROOT_PASS=$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | head -c 16)
 
-mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${MYSQL_ROOT_PASS}';"
+# Use socket auth via sudo for the initial setup to avoid password auth issues.
+sudo mysql <<EOF
+ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${MYSQL_ROOT_PASS}';
+FLUSH PRIVILEGES;
+EOF
+
 mysql -u root -p"${MYSQL_ROOT_PASS}" <<EOF
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
