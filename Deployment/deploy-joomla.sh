@@ -127,68 +127,79 @@ print_message "Updating system packages..."
 apt update && apt upgrade -y
 
 # Install prerequisites
-apt install -y software-properties-common gnupg2 curl lsb-release ca-certificates unzip wget
+print_message "Installing prerequisites..."
+apt install -y software-properties-common gnupg2 curl lsb-release ca-certificates unzip wget apt-transport-https
 
-# Attempt to add PHP 8.3 repository
-print_message "Attempting to add PHP 8.3 repository..."
-PHP83_AVAILABLE=false
-UBUNTU_CODENAME=$(lsb_release -cs)
+# Detect OS
+OS_ID=$(. /etc/os-release && echo "$ID")
+OS_CODENAME=$(lsb_release -cs)
+print_message "Detected OS: ${OS_ID} ${OS_CODENAME}"
 
-# Method 1: Ondrej PPA (Ubuntu)
-if add-apt-repository -y ppa:ondrej/php 2>/dev/null; then
-    apt update
-    if apt-cache show php8.3 &>/dev/null; then
-        PHP83_AVAILABLE=true
+# Install PHP 8.3 repository
+print_message "Adding PHP 8.3 repository..."
+
+if [ "$OS_ID" = "ubuntu" ]; then
+    # For Ubuntu: Use Ondrej PPA with explicit key import
+    print_message "Adding Ondrej PPA for Ubuntu..."
+    mkdir -p /etc/apt/keyrings
+    curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x14AA40EC0831756756D7F66C4F4EA0AAE5267A6C" \
+        | gpg --dearmor -o /etc/apt/keyrings/ondrej-php.gpg 2>/dev/null || true
+    echo "deb [signed-by=/etc/apt/keyrings/ondrej-php.gpg] https://ppa.launchpadcontent.net/ondrej/php/ubuntu ${OS_CODENAME} main" \
+        > /etc/apt/sources.list.d/ondrej-php.list
+
+    # If manual method fails, try add-apt-repository as fallback
+    apt update 2>/dev/null
+    if ! apt-cache show php8.3 &>/dev/null; then
+        print_warning "Manual PPA setup did not work, trying add-apt-repository..."
+        rm -f /etc/apt/sources.list.d/ondrej-php.list 2>/dev/null || true
+        rm -f /etc/apt/keyrings/ondrej-php.gpg 2>/dev/null || true
+        LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php
+        apt update
     fi
-fi
-
-# Method 2: Sury repo (Debian/Ubuntu) if Method 1 failed
-if [ "$PHP83_AVAILABLE" = false ]; then
-    print_message "Trying Sury repository..."
-    mkdir -p /usr/share/keyrings
-    curl -fsSL https://packages.sury.org/php/apt.gpg -o /usr/share/keyrings/sury-php.gpg 2>/dev/null || true
-    echo "deb [signed-by=/usr/share/keyrings/sury-php.gpg] https://packages.sury.org/php/ ${UBUNTU_CODENAME} main" > /etc/apt/sources.list.d/sury-php.list 2>/dev/null || true
-    apt update 2>/dev/null || true
-    if apt-cache show php8.3 &>/dev/null; then
-        PHP83_AVAILABLE=true
-    else
-        rm -f /etc/apt/sources.list.d/sury-php.list 2>/dev/null || true
-        apt update 2>/dev/null || true
-    fi
-fi
-
-# Install PHP
-if [ "$PHP83_AVAILABLE" = true ]; then
-    print_message "Installing PHP 8.3..."
-    PHP_VER="8.3"
-    apt install -y apache2 mysql-server \
-        php${PHP_VER} php${PHP_VER}-mysql php${PHP_VER}-xml php${PHP_VER}-mbstring \
-        php${PHP_VER}-zip php${PHP_VER}-gd php${PHP_VER}-curl php${PHP_VER}-intl \
-        libapache2-mod-php${PHP_VER} \
-        certbot python3-certbot-apache
 else
-    print_warning "PHP 8.3 repository not available. Installing system default PHP..."
-    apt install -y apache2 mysql-server \
-        php php-mysql php-xml php-mbstring php-zip php-gd php-curl php-intl \
-        libapache2-mod-php \
-        certbot python3-certbot-apache
+    # For Debian: Use Sury repository
+    print_message "Adding Sury repository for Debian..."
+    mkdir -p /etc/apt/keyrings
+    curl -fsSL https://packages.sury.org/php/apt.gpg -o /etc/apt/keyrings/sury-php.gpg
+    echo "deb [signed-by=/etc/apt/keyrings/sury-php.gpg] https://packages.sury.org/php/ ${OS_CODENAME} main" \
+        > /etc/apt/sources.list.d/sury-php.list
+    apt update
 fi
 
-# Detect the installed PHP version
-PHP_VER_FULL=$(php -r 'echo PHP_VERSION;' 2>/dev/null || echo "0")
-PHP_VER_SHORT=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null || echo "0")
-print_message "Installed PHP version: ${PHP_VER_FULL}"
+# Verify PHP 8.3 is available before proceeding
+if ! apt-cache show php8.3 &>/dev/null; then
+    print_error "PHP 8.3 packages are not available for ${OS_ID} ${OS_CODENAME}."
+    print_error "Please verify your OS version is supported (Ubuntu 20.04+ or Debian 11+)."
+    print_error "You may need to check network connectivity or proxy settings."
+    exit 1
+fi
+
+# Install PHP 8.3 and other packages
+print_message "Installing Apache, MySQL, PHP 8.3 and required extensions..."
+apt install -y apache2 mysql-server \
+    php8.3 php8.3-mysql php8.3-xml php8.3-mbstring \
+    php8.3-zip php8.3-gd php8.3-curl php8.3-intl \
+    libapache2-mod-php8.3 \
+    certbot python3-certbot-apache
+
+# Verify PHP 8.3 installed successfully
+if ! php8.3 -v &>/dev/null; then
+    print_error "PHP 8.3 installation failed."
+    exit 1
+fi
+
+print_message "Installed PHP version: $(php8.3 -r 'echo PHP_VERSION;')"
 
 # Enable Apache modules
 print_message "Enabling Apache modules..."
 a2dismod php* 2>/dev/null || true
-a2enmod php${PHP_VER_SHORT} 2>/dev/null || true
+a2enmod php8.3
 a2enmod rewrite
 a2enmod ssl
 a2enmod headers
 
-# Set installed PHP as default CLI version
-update-alternatives --set php /usr/bin/php${PHP_VER_SHORT} 2>/dev/null || true
+# Set PHP 8.3 as default CLI version
+update-alternatives --set php /usr/bin/php8.3 2>/dev/null || true
 
 # Start and enable services
 print_message "Starting services..."
@@ -234,18 +245,11 @@ chmod 600 /root/.joomla_db_credentials
 print_message "Downloading Joomla CMS..."
 cd /tmp
 
-# Determine compatible Joomla version based on PHP version
-PHP_MAJOR=$(php -r 'echo PHP_MAJOR_VERSION;' 2>/dev/null || echo "8")
-PHP_MINOR=$(php -r 'echo PHP_MINOR_VERSION;' 2>/dev/null || echo "1")
-
-if [ "$PHP_MAJOR" -gt 8 ] || ([ "$PHP_MAJOR" -eq 8 ] && [ "$PHP_MINOR" -ge 3 ]); then
-    # PHP >= 8.3 — latest Joomla
-    print_message "PHP ${PHP_MAJOR}.${PHP_MINOR} detected, downloading latest Joomla..."
-    JOOMLA_VERSION=$(curl -s https://api.github.com/repos/joomla/joomla-cms/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
-else
-    # PHP < 8.3 — use Joomla 5.2.4 (last version supporting PHP 8.1+)
-    print_warning "PHP ${PHP_MAJOR}.${PHP_MINOR} detected. Downloading Joomla 5.2.4 (compatible with PHP 8.1+)..."
-    JOOMLA_VERSION="5.2.4"
+# Download latest Joomla (PHP 8.3 is guaranteed at this point)
+JOOMLA_VERSION=$(curl -s https://api.github.com/repos/joomla/joomla-cms/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
+if [ -z "$JOOMLA_VERSION" ]; then
+    print_error "Failed to fetch latest Joomla version from GitHub API."
+    exit 1
 fi
 
 print_message "Installing Joomla version: ${JOOMLA_VERSION}"
