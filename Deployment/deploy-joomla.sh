@@ -167,7 +167,7 @@ if [ "$PHP83_AVAILABLE" = true ]; then
         libapache2-mod-php${PHP_VER} \
         certbot python3-certbot-apache
 else
-    print_warn "PHP 8.3 repository not available. Installing system default PHP..."
+    print_warning "PHP 8.3 repository not available. Installing system default PHP..."
     apt install -y apache2 mysql-server \
         php php-mysql php-xml php-mbstring php-zip php-gd php-curl php-intl \
         libapache2-mod-php \
@@ -244,7 +244,7 @@ if [ "$PHP_MAJOR" -gt 8 ] || ([ "$PHP_MAJOR" -eq 8 ] && [ "$PHP_MINOR" -ge 3 ]);
     JOOMLA_VERSION=$(curl -s https://api.github.com/repos/joomla/joomla-cms/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
 else
     # PHP < 8.3 — use Joomla 5.2.4 (last version supporting PHP 8.1+)
-    print_warn "PHP ${PHP_MAJOR}.${PHP_MINOR} detected. Downloading Joomla 5.2.4 (compatible with PHP 8.1+)..."
+    print_warning "PHP ${PHP_MAJOR}.${PHP_MINOR} detected. Downloading Joomla 5.2.4 (compatible with PHP 8.1+)..."
     JOOMLA_VERSION="5.2.4"
 fi
 
@@ -325,7 +325,7 @@ if [ -f "$PHP_INI" ]; then
     sed -i 's/memory_limit = .*/memory_limit = 256M/' $PHP_INI
     sed -i 's/max_execution_time = .*/max_execution_time = 300/' $PHP_INI
 else
-    print_warn "Could not locate php.ini — skipping PHP tuning."
+    print_warning "Could not locate php.ini — skipping PHP tuning."
 fi
 
 # Restart Apache to apply changes
