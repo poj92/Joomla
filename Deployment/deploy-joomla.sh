@@ -128,8 +128,20 @@ apt update && apt upgrade -y
 
 # Add PHP 8.3 repository
 print_message "Adding PHP 8.3 repository..."
-apt install -y software-properties-common
-add-apt-repository -y ppa:ondrej/php
+apt install -y software-properties-common gnupg2 curl lsb-release ca-certificates
+
+# Try PPA method first
+if ! add-apt-repository -y ppa:ondrej/php 2>/dev/null; then
+    print_warn "PPA method failed, trying alternative repository setup..."
+    
+    # Alternative: Add the repository manually
+    UBUNTU_VERSION=$(lsb_release -cs)
+    echo "deb https://ppa.launchpadcontent.net/ondrej/php/ubuntu ${UBUNTU_VERSION} main" > /etc/apt/sources.list.d/ondrej-ubuntu-php-${UBUNTU_VERSION}.list
+    
+    # Add the GPG key
+    curl -fsSL https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xE5267A6C 2>/dev/null | apt-key add - || true
+fi
+
 apt update
 
 # Install required packages
