@@ -138,27 +138,40 @@ print_message "Detected OS: ${OS_ID} ${OS_CODENAME}"
 # Install PHP 8.3 repository
 print_message "Adding PHP 8.3 repository..."
 
+# Remove any broken previous attempts
+rm -f /etc/apt/sources.list.d/ondrej-*.list* /etc/apt/sources.list.d/sury-*.list* 2>/dev/null || true
+rm -f /etc/apt/keyrings/ondrej-php.gpg /etc/apt/keyrings/sury-php.gpg 2>/dev/null || true
+
 if [ "$OS_ID" = "ubuntu" ]; then
-    # For Ubuntu: Use Ondrej PPA with explicit key import
-    print_message "Adding Ondrej PPA for Ubuntu..."
+    print_message "Adding Ondrej PHP PPA for Ubuntu ${OS_CODENAME}..."
+
+    # Import GPG key from the Ubuntu keyserver
     mkdir -p /etc/apt/keyrings
-    curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x14AA40EC0831756756D7F66C4F4EA0AAE5267A6C" \
-        | gpg --dearmor -o /etc/apt/keyrings/ondrej-php.gpg 2>/dev/null || true
+    gpg --no-default-keyring \
+        --keyring /etc/apt/keyrings/ondrej-php.gpg \
+        --keyserver hkp://keyserver.ubuntu.com:80 \
+        --recv-keys 4F4EA0AAE5267A6C 2>/dev/null || {
+        # Fallback: fetch key via HTTPS
+        print_warning "Keyserver fetch failed, trying HTTPS fallback..."
+        curl -fsSL 'https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x14AA40EC0831756756D7F66C4F4EA0AAE5267A6C' \
+            | gpg --no-default-keyring --keyring /etc/apt/keyrings/ondrej-php.gpg --import 2>/dev/null
+    }
+
+    # Add the PPA source list
     echo "deb [signed-by=/etc/apt/keyrings/ondrej-php.gpg] https://ppa.launchpadcontent.net/ondrej/php/ubuntu ${OS_CODENAME} main" \
         > /etc/apt/sources.list.d/ondrej-php.list
 
-    # If manual method fails, try add-apt-repository as fallback
-    apt update 2>/dev/null
+    apt update
+
+    # If that didn't work, try add-apt-repository as last resort
     if ! apt-cache show php8.3 &>/dev/null; then
-        print_warning "Manual PPA setup did not work, trying add-apt-repository..."
-        rm -f /etc/apt/sources.list.d/ondrej-php.list 2>/dev/null || true
-        rm -f /etc/apt/keyrings/ondrej-php.gpg 2>/dev/null || true
+        print_warning "Manual PPA setup did not expose php8.3, trying add-apt-repository..."
+        rm -f /etc/apt/sources.list.d/ondrej-php.list /etc/apt/keyrings/ondrej-php.gpg 2>/dev/null || true
         LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php
         apt update
     fi
 else
-    # For Debian: Use Sury repository
-    print_message "Adding Sury repository for Debian..."
+    print_message "Adding Sury PHP repository for Debian ${OS_CODENAME}..."
     mkdir -p /etc/apt/keyrings
     curl -fsSL https://packages.sury.org/php/apt.gpg -o /etc/apt/keyrings/sury-php.gpg
     echo "deb [signed-by=/etc/apt/keyrings/sury-php.gpg] https://packages.sury.org/php/ ${OS_CODENAME} main" \
@@ -166,11 +179,19 @@ else
     apt update
 fi
 
+# Debug: show what repos are configured for php
+print_message "Checking available PHP packages..."
+apt-cache policy php8.3 2>/dev/null || true
+
 # Verify PHP 8.3 is available before proceeding
 if ! apt-cache show php8.3 &>/dev/null; then
     print_error "PHP 8.3 packages are not available for ${OS_ID} ${OS_CODENAME}."
-    print_error "Please verify your OS version is supported (Ubuntu 20.04+ or Debian 11+)."
-    print_error "You may need to check network connectivity or proxy settings."
+    print_error ""
+    print_error "Debugging info:"
+    ls -la /etc/apt/sources.list.d/ 2>/dev/null || true
+    ls -la /etc/apt/keyrings/ 2>/dev/null || true
+    print_error ""
+    print_error "Try running manually: apt update && apt-cache policy php8.3"
     exit 1
 fi
 
