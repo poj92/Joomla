@@ -229,7 +229,8 @@ cat > /etc/apache2/sites-available/${DOMAIN}.conf <<EOF
 EOF
 
 # Disable default site and enable new site
-a2dissite 000-default.conf
+a2dissite 000-default.conf 2>/dev/null || true
+a2dissite 000-default 2>/dev/null || true
 a2ensite ${DOMAIN}.conf
 
 # Reload Apache
