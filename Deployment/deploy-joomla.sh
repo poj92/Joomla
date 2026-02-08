@@ -126,20 +126,25 @@ fi
 print_message "Updating system packages..."
 apt update && apt upgrade -y
 
+# Add PHP 8.3 repository
+print_message "Adding PHP 8.3 repository..."
+apt install -y software-properties-common
+add-apt-repository -y ppa:ondrej/php
+apt update
+
 # Install required packages
-print_message "Installing Apache, MySQL, PHP and required extensions..."
+print_message "Installing Apache, MySQL, PHP 8.3 and required extensions..."
 apt install -y apache2 \
     mysql-server \
-    php \
-    php-mysql \
-    php-xml \
-    php-mbstring \
-    php-json \
-    php-zip \
-    php-gd \
-    php-curl \
-    php-intl \
-    libapache2-mod-php \
+    php8.3 \
+    php8.3-mysql \
+    php8.3-xml \
+    php8.3-mbstring \
+    php8.3-zip \
+    php8.3-gd \
+    php8.3-curl \
+    php8.3-intl \
+    libapache2-mod-php8.3 \
     certbot \
     python3-certbot-apache \
     unzip \
@@ -147,9 +152,20 @@ apt install -y apache2 \
 
 # Enable Apache modules
 print_message "Enabling Apache modules..."
+# Disable any conflicting PHP modules first
+a2dismod php* 2>/dev/null || true
+# Enable PHP 8.3 module
+a2enmod php8.3 2>/dev/null || true
 a2enmod rewrite
 a2enmod ssl
 a2enmod headers
+
+# Set PHP 8.3 as default CLI version
+update-alternatives --set php /usr/bin/php8.3 2>/dev/null || true
+
+# Verify PHP version
+print_message "Verifying PHP installation..."
+php -v
 
 # Start and enable services
 print_message "Starting services..."
@@ -254,7 +270,7 @@ systemctl start certbot.timer
 
 # Configure PHP settings for Joomla
 print_message "Optimizing PHP configuration..."
-PHP_INI=$(php -i | grep "Loaded Configuration File" | awk '{print $5}')
+PHP_INI="/etc/php/8.3/apache2/php.ini"
 if [ -f "$PHP_INI" ]; then
     sed -i 's/upload_max_filesize = .*/upload_max_filesize = 32M/' $PHP_INI
     sed -i 's/post_max_size = .*/post_max_size = 32M/' $PHP_INI
@@ -264,6 +280,18 @@ fi
 
 # Restart Apache to apply changes
 systemctl restart apache2
+
+# Verify PHP is properly configured for Apache
+print_message "Verifying PHP 8.3 Apache configuration..."
+PHP_VERSION=$(php -v | grep -oP 'PHP \K[0-9.]+' | head -1)
+print_message "CLI PHP Version: ${PHP_VERSION}"
+
+# Check Apache module
+if apache2ctl -M 2>/dev/null | grep -q php8.3; then
+    print_message "Apache Module: php8.3 ✓"
+else
+    print_warning "php8.3 module not detected in Apache"
+fi
 
 # Display installation summary
 print_message "==============================================="
