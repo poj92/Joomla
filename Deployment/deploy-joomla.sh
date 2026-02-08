@@ -266,12 +266,41 @@ chmod 600 /root/.joomla_db_credentials
 print_message "Downloading Joomla CMS..."
 cd /tmp
 
-# Download latest Joomla (PHP 8.3 is guaranteed at this point)
-JOOMLA_VERSION=$(curl -s https://api.github.com/repos/joomla/joomla-cms/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
-if [ -z "$JOOMLA_VERSION" ]; then
-    print_error "Failed to fetch latest Joomla version from GitHub API."
+# Fetch available Joomla versions from GitHub API
+print_message "Fetching available Joomla versions..."
+JOOMLA_RELEASES=$(curl -s "https://api.github.com/repos/joomla/joomla-cms/releases?per_page=20" \
+    | grep -oP '"tag_name": "\K[^"]+')
+
+if [ -z "$JOOMLA_RELEASES" ]; then
+    print_error "Failed to fetch Joomla versions from GitHub API."
     exit 1
 fi
+
+# Store versions in an array
+mapfile -t VERSIONS <<< "$JOOMLA_RELEASES"
+
+echo
+print_message "Available Joomla versions:"
+echo
+for i in "${!VERSIONS[@]}"; do
+    if [ "$i" -eq 0 ]; then
+        echo -e "  ${GREEN}$((i+1)))${NC} ${VERSIONS[$i]} ${YELLOW}(latest)${NC}"
+    else
+        echo -e "  ${GREEN}$((i+1)))${NC} ${VERSIONS[$i]}"
+    fi
+done
+echo
+
+while true; do
+    read -p "Select a version [1-${#VERSIONS[@]}] (default: 1 - latest): " VERSION_CHOICE
+    VERSION_CHOICE=${VERSION_CHOICE:-1}
+    if [[ "$VERSION_CHOICE" =~ ^[0-9]+$ ]] && [ "$VERSION_CHOICE" -ge 1 ] && [ "$VERSION_CHOICE" -le "${#VERSIONS[@]}" ]; then
+        JOOMLA_VERSION="${VERSIONS[$((VERSION_CHOICE-1))]}"
+        break
+    else
+        print_error "Invalid selection. Please enter a number between 1 and ${#VERSIONS[@]}."
+    fi
+done
 
 print_message "Installing Joomla version: ${JOOMLA_VERSION}"
 wget -q "https://github.com/joomla/joomla-cms/releases/download/${JOOMLA_VERSION}/Joomla_${JOOMLA_VERSION}-Stable-Full_Package.zip" -O joomla.zip
