@@ -71,6 +71,8 @@ confirm_or_exit() {
 }
 
 cleanup_joomla() {
+	declare -a domains_to_clean=()
+	
 	print_info "Searching for Joomla installations under /var/www..."
 	mapfile -d '' -t joomla_configs < <(find /var/www -maxdepth 3 -type f -name configuration.php -print0 2>/dev/null || true)
 
@@ -85,6 +87,9 @@ cleanup_joomla() {
 		print_warn "The following Joomla directories will be removed:"
 		for dir in "${joomla_dirs[@]}"; do
 			echo "  - ${dir}"
+			# Extract domain name from path for later SSL cleanup
+			local domain_name=$(basename "${dir}")
+			domains_to_clean+=("${domain_name}")
 		done
 
 		confirm_or_exit "Type REMOVE-JOOMLA to confirm" "REMOVE-JOOMLA"
@@ -96,6 +101,7 @@ cleanup_joomla() {
 		print_info "Joomla directories removed."
 	fi
 
+	# Clean up Apache configurations
 	if [[ -d /etc/apache2/sites-available ]]; then
 		print_info "Cleaning Apache virtual host configs pointing to /var/www..."
 		mapfile -t site_confs < <(grep -rl "DocumentRoot /var/www" /etc/apache2/sites-available 2>/dev/null || true)
@@ -114,6 +120,30 @@ cleanup_joomla() {
 		fi
 	fi
 
+	# Clean up Apache log files
+	print_info "Cleaning Apache log files for removed domains..."
+	for domain in "${domains_to_clean[@]}"; do
+		rm -f /var/log/apache2/${domain}*.log* 2>/dev/null || true
+	done
+
+	# Clean up Let's Encrypt certificates
+	print_info "Cleaning Let's Encrypt certificates..."
+	for domain in "${domains_to_clean[@]}"; do
+		if [[ -d /etc/letsencrypt/renewal ]]; then
+			rm -f /etc/letsencrypt/renewal/${domain}.conf 2>/dev/null || true
+			rm -f /etc/letsencrypt/renewal/www.${domain}.conf 2>/dev/null || true
+		fi
+		if [[ -d /etc/letsencrypt/live ]]; then
+			rm -rf /etc/letsencrypt/live/${domain} 2>/dev/null || true
+			rm -rf /etc/letsencrypt/live/www.${domain} 2>/dev/null || true
+		fi
+		if [[ -d /etc/letsencrypt/archive ]]; then
+			rm -rf /etc/letsencrypt/archive/${domain} 2>/dev/null || true
+			rm -rf /etc/letsencrypt/archive/www.${domain} 2>/dev/null || true
+		fi
+	done
+
+	# Clean up database
 	if [[ -f /root/.joomla_db_credentials ]]; then
 		print_info "Found /root/.joomla_db_credentials."
 		local mysql_root_pass db_name db_user
@@ -124,16 +154,49 @@ cleanup_joomla() {
 		if [[ -n "${mysql_root_pass}" && -n "${db_name}" && -n "${db_user}" ]]; then
 			print_warn "Dropping Joomla database and user: ${db_name} / ${db_user}"
 			mysql -u root -p"${mysql_root_pass}" -e "DROP DATABASE IF EXISTS ${db_name}; DROP USER IF EXISTS '${db_user}'@'localhost'; FLUSH PRIVILEGES;" || true
-			rm -f /root/.joomla_db_credentials
-			print_info "Database and user removed. Credentials file deleted."
+			print_info "Database and user removed."
 		else
 			print_warn "Credentials file is incomplete; skipping DB cleanup."
 		fi
 	else
-		print_warn "No credentials file found; skipping DB cleanup."
+		print_warn "No credentials file found at /root/.joomla_db_credentials"
+		# Try to clean up via socket auth if no credentials found
+		if systemctl is-active --quiet mysql 2>/dev/null; then
+			print_info "Attempting database cleanup via socket authentication..."
+			sudo mysql -e "DROP DATABASE IF EXISTS joomla_db; DROP USER IF EXISTS 'joomla_user'@'localhost'; FLUSH PRIVILEGES;" 2>/dev/null || true
+		fi
 	fi
 
-	print_info "Joomla cleanup completed."
+	# Remove all Joomla-related credential files
+	print_info "Removing credential files..."
+	rm -f /root/.joomla* 2>/dev/null || true
+
+	# Clean up temporary files
+	print_info "Cleaning temporary files..."
+	rm -f /tmp/joomla*.zip 2>/dev/null || true
+	rm -rf /tmp/joomla_* 2>/dev/null || true
+
+	# Clean up PHP sessions (optional - only if you want to clear all sessions)
+	if [[ -d /var/lib/php/sessions ]]; then
+		print_info "Cleaning PHP session files..."
+		find /var/lib/php/sessions -type f -name 'sess_*' -mtime +1 -delete 2>/dev/null || true
+	fi
+
+	# Offer to purge MySQL entirely
+	echo
+	read -r -p "Do you want to completely reset MySQL (remove all databases)? [y/N]: " reset_mysql
+	if [[ "${reset_mysql}" =~ ^[Yy]$ ]]; then
+		print_warn "This will stop MySQL, remove all data, and reinitialize the database."
+		confirm_or_exit "Type RESET-MYSQL to confirm" "RESET-MYSQL"
+		
+		systemctl stop mysql 2>/dev/null || true
+		rm -rf /var/lib/mysql/* 2>/dev/null || true
+		mysqld --initialize-insecure --user=mysql 2>/dev/null || true
+		systemctl start mysql 2>/dev/null || true
+		print_info "MySQL completely reset with empty databases."
+	fi
+
+	print_info "Joomla cleanup completed - all residual files removed."
 }
 
 wipe_os() {
