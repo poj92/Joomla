@@ -126,58 +126,69 @@ fi
 print_message "Updating system packages..."
 apt update && apt upgrade -y
 
-# Add PHP 8.3 repository
-print_message "Adding PHP 8.3 repository..."
-apt install -y software-properties-common gnupg2 curl lsb-release ca-certificates
+# Install prerequisites
+apt install -y software-properties-common gnupg2 curl lsb-release ca-certificates unzip wget
 
-# Try PPA method first
-if ! add-apt-repository -y ppa:ondrej/php 2>/dev/null; then
-    print_warn "PPA method failed, trying alternative repository setup..."
-    
-    # Alternative: Add the repository manually
-    UBUNTU_VERSION=$(lsb_release -cs)
-    echo "deb https://ppa.launchpadcontent.net/ondrej/php/ubuntu ${UBUNTU_VERSION} main" > /etc/apt/sources.list.d/ondrej-ubuntu-php-${UBUNTU_VERSION}.list
-    
-    # Add the GPG key
-    curl -fsSL https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xE5267A6C 2>/dev/null | apt-key add - || true
+# Attempt to add PHP 8.3 repository
+print_message "Attempting to add PHP 8.3 repository..."
+PHP83_AVAILABLE=false
+UBUNTU_CODENAME=$(lsb_release -cs)
+
+# Method 1: Ondrej PPA (Ubuntu)
+if add-apt-repository -y ppa:ondrej/php 2>/dev/null; then
+    apt update
+    if apt-cache show php8.3 &>/dev/null; then
+        PHP83_AVAILABLE=true
+    fi
 fi
 
-apt update
+# Method 2: Sury repo (Debian/Ubuntu) if Method 1 failed
+if [ "$PHP83_AVAILABLE" = false ]; then
+    print_message "Trying Sury repository..."
+    mkdir -p /usr/share/keyrings
+    curl -fsSL https://packages.sury.org/php/apt.gpg -o /usr/share/keyrings/sury-php.gpg 2>/dev/null || true
+    echo "deb [signed-by=/usr/share/keyrings/sury-php.gpg] https://packages.sury.org/php/ ${UBUNTU_CODENAME} main" > /etc/apt/sources.list.d/sury-php.list 2>/dev/null || true
+    apt update 2>/dev/null || true
+    if apt-cache show php8.3 &>/dev/null; then
+        PHP83_AVAILABLE=true
+    else
+        rm -f /etc/apt/sources.list.d/sury-php.list 2>/dev/null || true
+        apt update 2>/dev/null || true
+    fi
+fi
 
-# Install required packages
-print_message "Installing Apache, MySQL, PHP 8.3 and required extensions..."
-apt install -y apache2 \
-    mysql-server \
-    php8.3 \
-    php8.3-mysql \
-    php8.3-xml \
-    php8.3-mbstring \
-    php8.3-zip \
-    php8.3-gd \
-    php8.3-curl \
-    php8.3-intl \
-    libapache2-mod-php8.3 \
-    certbot \
-    python3-certbot-apache \
-    unzip \
-    wget
+# Install PHP
+if [ "$PHP83_AVAILABLE" = true ]; then
+    print_message "Installing PHP 8.3..."
+    PHP_VER="8.3"
+    apt install -y apache2 mysql-server \
+        php${PHP_VER} php${PHP_VER}-mysql php${PHP_VER}-xml php${PHP_VER}-mbstring \
+        php${PHP_VER}-zip php${PHP_VER}-gd php${PHP_VER}-curl php${PHP_VER}-intl \
+        libapache2-mod-php${PHP_VER} \
+        certbot python3-certbot-apache
+else
+    print_warn "PHP 8.3 repository not available. Installing system default PHP..."
+    apt install -y apache2 mysql-server \
+        php php-mysql php-xml php-mbstring php-zip php-gd php-curl php-intl \
+        libapache2-mod-php \
+        certbot python3-certbot-apache
+fi
+
+# Detect the installed PHP version
+PHP_VER_FULL=$(php -r 'echo PHP_VERSION;' 2>/dev/null || echo "0")
+PHP_VER_SHORT=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null || echo "0")
+print_message "Installed PHP version: ${PHP_VER_FULL}"
 
 # Enable Apache modules
 print_message "Enabling Apache modules..."
-# Disable any conflicting PHP modules first
 a2dismod php* 2>/dev/null || true
-# Enable PHP 8.3 module
-a2enmod php8.3 2>/dev/null || true
+a2enmod php${PHP_VER_SHORT} 2>/dev/null || true
 a2enmod rewrite
 a2enmod ssl
 a2enmod headers
 
-# Set PHP 8.3 as default CLI version
-update-alternatives --set php /usr/bin/php8.3 2>/dev/null || true
-
-# Verify PHP version
-print_message "Verifying PHP installation..."
-php -v
+# Set installed PHP as default CLI version
+update-alternatives --set php /usr/bin/php${PHP_VER_SHORT} 2>/dev/null || true
 
 # Start and enable services
 print_message "Starting services..."
@@ -222,8 +233,28 @@ chmod 600 /root/.joomla_db_credentials
 # Download and install Joomla
 print_message "Downloading Joomla CMS..."
 cd /tmp
-JOOMLA_VERSION=$(curl -s https://api.github.com/repos/joomla/joomla-cms/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
+
+# Determine compatible Joomla version based on PHP version
+PHP_MAJOR=$(php -r 'echo PHP_MAJOR_VERSION;' 2>/dev/null || echo "8")
+PHP_MINOR=$(php -r 'echo PHP_MINOR_VERSION;' 2>/dev/null || echo "1")
+
+if [ "$PHP_MAJOR" -gt 8 ] || ([ "$PHP_MAJOR" -eq 8 ] && [ "$PHP_MINOR" -ge 3 ]); then
+    # PHP >= 8.3 — latest Joomla
+    print_message "PHP ${PHP_MAJOR}.${PHP_MINOR} detected, downloading latest Joomla..."
+    JOOMLA_VERSION=$(curl -s https://api.github.com/repos/joomla/joomla-cms/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
+else
+    # PHP < 8.3 — use Joomla 5.2.4 (last version supporting PHP 8.1+)
+    print_warn "PHP ${PHP_MAJOR}.${PHP_MINOR} detected. Downloading Joomla 5.2.4 (compatible with PHP 8.1+)..."
+    JOOMLA_VERSION="5.2.4"
+fi
+
+print_message "Installing Joomla version: ${JOOMLA_VERSION}"
 wget -q "https://github.com/joomla/joomla-cms/releases/download/${JOOMLA_VERSION}/Joomla_${JOOMLA_VERSION}-Stable-Full_Package.zip" -O joomla.zip
+
+if [ ! -f joomla.zip ] || [ ! -s joomla.zip ]; then
+    print_error "Failed to download Joomla. Please check your internet connection."
+    exit 1
+fi
 
 print_message "Installing Joomla to /var/www/${DOMAIN}..."
 mkdir -p /var/www/${DOMAIN}
@@ -282,28 +313,28 @@ systemctl start certbot.timer
 
 # Configure PHP settings for Joomla
 print_message "Optimizing PHP configuration..."
-PHP_INI="/etc/php/8.3/apache2/php.ini"
+PHP_INI=$(php -i 2>/dev/null | grep "Loaded Configuration File" | awk '{print $5}')
+if [ -z "$PHP_INI" ] || [ ! -f "$PHP_INI" ]; then
+    # Fallback: search for the Apache php.ini
+    PHP_INI=$(find /etc/php -path "*/apache2/php.ini" 2>/dev/null | sort -rV | head -1)
+fi
 if [ -f "$PHP_INI" ]; then
+    print_message "Updating PHP config: ${PHP_INI}"
     sed -i 's/upload_max_filesize = .*/upload_max_filesize = 32M/' $PHP_INI
     sed -i 's/post_max_size = .*/post_max_size = 32M/' $PHP_INI
     sed -i 's/memory_limit = .*/memory_limit = 256M/' $PHP_INI
     sed -i 's/max_execution_time = .*/max_execution_time = 300/' $PHP_INI
+else
+    print_warn "Could not locate php.ini — skipping PHP tuning."
 fi
 
 # Restart Apache to apply changes
 systemctl restart apache2
 
 # Verify PHP is properly configured for Apache
-print_message "Verifying PHP 8.3 Apache configuration..."
-PHP_VERSION=$(php -v | grep -oP 'PHP \K[0-9.]+' | head -1)
-print_message "CLI PHP Version: ${PHP_VERSION}"
-
-# Check Apache module
-if apache2ctl -M 2>/dev/null | grep -q php8.3; then
-    print_message "Apache Module: php8.3 ✓"
-else
-    print_warning "php8.3 module not detected in Apache"
-fi
+print_message "Verifying PHP Apache configuration..."
+PHP_VERSION=$(php -r 'echo PHP_VERSION;' 2>/dev/null || echo 'unknown')
+print_message "PHP Version: ${PHP_VERSION}"
 
 # Display installation summary
 print_message "==============================================="
