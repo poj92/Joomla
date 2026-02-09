@@ -266,17 +266,23 @@ chmod 600 /root/.joomla_db_credentials
 print_message "Downloading Joomla CMS..."
 cd /tmp
 
-# Fetch available Joomla versions from GitHub API
+# Fetch available stable Joomla versions from GitHub API
 print_message "Fetching available Joomla versions..."
-JOOMLA_RELEASES=$(curl -s "https://api.github.com/repos/joomla/joomla-cms/releases?per_page=20" \
-    | grep -oP '"tag_name": "\K[^"]+')
+JOOMLA_RELEASES=$(curl -s "https://api.github.com/repos/joomla/joomla-cms/releases?per_page=50" \
+    | python3 -c "
+import sys, json
+releases = json.load(sys.stdin)
+for r in releases:
+    if not r.get('prerelease', False) and not r.get('draft', False):
+        print(r['tag_name'])
+" 2>/dev/null)
 
 if [ -z "$JOOMLA_RELEASES" ]; then
     print_error "Failed to fetch Joomla versions from GitHub API."
     exit 1
 fi
 
-# Store versions in an array
+# Store versions in an array (only stable releases)
 mapfile -t VERSIONS <<< "$JOOMLA_RELEASES"
 
 echo
